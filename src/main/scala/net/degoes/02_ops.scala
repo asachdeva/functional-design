@@ -1,4 +1,6 @@
 package net.degoes
+
+import java.io.BufferedInputStream
 /*
  * INTRODUCTION
  *
@@ -42,7 +44,28 @@ object input_stream {
      * exhausted, it will close the first input stream, make the second
      * input stream, and continue reading from the second one.
      */
-    def ++(that: IStream): IStream = ???
+    def ++(that: IStream): IStream =
+      IStream { () =>
+        new InputStream {
+          var is           = self.createInputStream()
+          var switchedOver = false
+
+          def read(): Int = {
+            val byte = is.read()
+
+            if (byte == -1 && !switchedOver) {
+              switchedOver = true
+              is.close()
+
+              is = that.createInputStream()
+
+              is.read()
+            } else byte
+          }
+
+          override def close(): Unit = is.close()
+        }
+      }
 
     /**
      * EXERCISE 2
@@ -51,7 +74,14 @@ object input_stream {
      * try to create the first input stream, but if that fails by throwing
      * an exception, it will then try to create the second input stream.
      */
-    def orElse(that: IStream): IStream = ???
+    def orElse(that: IStream): IStream =
+      IStream { () =>
+        try {
+          self.createInputStream()
+        } catch {
+          case t: Throwable => that.createInputStream()
+        }
+      }
 
     /**
      * EXERCISE 3
@@ -60,7 +90,10 @@ object input_stream {
      * create the input stream, but wrap it in Java's `BufferedInputStream`
      * before returning it.
      */
-    def buffered: IStream = ???
+    def buffered: IStream =
+      IStream { () =>
+        new BufferedInputStream(self.createInputStream())
+      }
   }
 
   /**
@@ -94,7 +127,8 @@ object email_filter {
      * Add an "and" operator that will match an email if both the first and
      * the second email filter match the email.
      */
-    def &&(that: EmailFilter): EmailFilter = ???
+    def &&(that: EmailFilter): EmailFilter =
+      EmailFilter(email => self.matches(email) && that.matches(email))
 
     /**
      * EXERCISE 2
@@ -102,7 +136,8 @@ object email_filter {
      * Add an "or" operator that will match an email if either the first or
      * the second email filter match the email.
      */
-    def ||(that: EmailFilter): EmailFilter = ???
+    def ||(that: EmailFilter): EmailFilter =
+      EmailFilter(email => self.matches(email) || that.matches(email))
 
     /**
      * EXERCISE 3
@@ -110,7 +145,8 @@ object email_filter {
      * Add a "negate" operator that will match an email if this email filter
      * does NOT match an email.
      */
-    def negate: EmailFilter = ???
+    def negate: EmailFilter =
+      EmailFilter(email => !self.matches(email))
   }
   object EmailFilter {
     def senderIs(address: Address): EmailFilter = EmailFilter(_.sender == address)
@@ -130,7 +166,10 @@ object email_filter {
    * addressed to "john@doe.com". Build this filter up compositionally
    * by using the defined constructors and operators.
    */
-  lazy val emailFilter1 = ???
+  lazy val emailFilter1 = (EmailFilter.subjectContains("discount")
+    && EmailFilter.bodyContains("N95")
+    && EmailFilter.recipientIs(Address("john@doe.com")).negate)
+
 }
 
 /**
@@ -222,7 +261,19 @@ object contact_processing {
      * then the result must also fail. Only if both schema mappings succeed
      * can the resulting schema mapping succeed.
      */
-    def +(that: SchemaMapping): SchemaMapping = ???
+    def +(that: SchemaMapping): SchemaMapping =
+      SchemaMapping { contacts =>
+        import MappingResult._
+
+        self.map(contacts) match {
+          case Success(warnings1, _) =>
+            that.map(contacts) match {
+              case Success(warnings2, _) => Success(warnings1 ++ warnings2, contacts)
+              case x                     => x
+            }
+          case x => x
+        }
+      }
 
     /**
      * EXERCISE 2
@@ -231,7 +282,14 @@ object contact_processing {
      * applying the effects of the first one, unless it fails, and in that
      * case, applying the effects of the second one.
      */
-    def orElse(that: SchemaMapping): SchemaMapping = ???
+    def orElse(that: SchemaMapping): SchemaMapping = SchemaMapping { contacts =>
+      import MappingResult._
+
+      self.map(contacts) match {
+        case Failure(errors) => that.map(contacts)
+        case x               => x
+      }
+    }
 
     /**
      * BONUS: EXERCISE 3
@@ -248,7 +306,10 @@ object contact_processing {
      *
      * Add a constructor for `SchemaMapping` that renames a column.
      */
-    def rename(oldName: String, newName: String): SchemaMapping = ???
+    def rename(oldName: String, newName: String): SchemaMapping = SchemaMapping { csv =>
+      val csv2 = csv.rename(oldColumn = oldName, newColumn = newName)
+      MappingResult.Success(if (csv == csv2) List(s"Renaming $oldName to $newName had no effect") else Nil, cvs2)
+    }
 
     /**
      * EXERCISE 5
