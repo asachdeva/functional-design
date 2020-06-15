@@ -308,7 +308,7 @@ object contact_processing {
      */
     def rename(oldName: String, newName: String): SchemaMapping = SchemaMapping { csv =>
       val csv2 = csv.rename(oldColumn = oldName, newColumn = newName)
-      MappingResult.Success(if (csv == csv2) List(s"Renaming $oldName to $newName had no effect") else Nil, cvs2)
+      MappingResult.Success(if (csv == csv2) List(s"Renaming $oldName to $newName had no effect") else Nil, csv2)
     }
 
     /**
@@ -394,7 +394,10 @@ object ui_events {
      * Add a method `+` that composes two listeners into a single listener,
      * by sending each game event to both listeners.
      */
-    def +(that: Listener): Listener = ???
+    def +(that: Listener): Listener = Listener { event =>
+      self.onEvent(event)
+      that.onEvent(event)
+    }
 
     /**
      * EXERCISE 2
@@ -403,7 +406,14 @@ object ui_events {
      * by sending each game event to either the left listener, if it does not
      * throw an exception, or the right listener, if the left throws an exception.
      */
-    def orElse(that: Listener): Listener = ???
+    def orElse(that: Listener): Listener =
+      Listener { event =>
+        try {
+          self.onEvent(event)
+        } catch {
+          case _: Throwable => that.onEvent(event)
+        }
+      }
 
     /**
      * EXERCISE 3
@@ -411,7 +421,9 @@ object ui_events {
      * Add a `runOn` operator that returns a Listener that will call this one's
      * `onEvent` callback on the specified `ExecutionContext`.
      */
-    def runOn(ec: scala.concurrent.ExecutionContext): Listener = ???
+    def runOn(ec: scala.concurrent.ExecutionContext): Listener = Listener { event =>
+      ec.execute(() => self.onEvent(event))
+    }
 
     /**
      * EXERCISE 4
@@ -419,7 +431,10 @@ object ui_events {
      * Add a `debug` unary operator that will call the `onEvent` callback, but
      * before it does, it will print out the game event to the console.
      */
-    def debug: Listener = ???
+    def debug: Listener = Listener { event =>
+      println(event)
+      onEvent(event)
+    }
   }
 }
 
@@ -444,7 +459,7 @@ object education {
     final case class TrueFalse(question: String, checker: Checker[Boolean]) extends Question[Boolean]
   }
 
-  final case class QuizResult(correctPoints: Int, bonusPoints: Int, wrongPoints: Int, wrong: Vector[String]) {
+  final case class QuizResult(correctPoints: Int, bonusPoints: Int, wrongPoints: Int, wrong: Vector[String]) { self =>
     def totalPoints: Int = correctPoints - wrongPoints
 
     def toBonus: QuizResult = QuizResult(0, bonusPoints + correctPoints, 0, Vector.empty)
@@ -455,7 +470,13 @@ object education {
      * Add a `+` operator that combines this quiz result with the specified
      * quiz result.
      */
-    def +(that: QuizResult): QuizResult = ???
+    def +(that: QuizResult): QuizResult =
+      QuizResult(
+        self.correctPoints + that.correctPoints,
+        self.bonusPoints + that.bonusPoints,
+        self.wrongPoints + that.wrongPoints,
+        self.wrong ++ that.wrong
+      )
   }
   object QuizResult {
 
@@ -465,7 +486,7 @@ object education {
      * Add an `empty` QuizResult that, when combined with any quiz result,
      * returns that same quiz result.
      */
-    def empty: QuizResult = ???
+    def empty: QuizResult = QuizResult(0, 0, 0, Vector.empty)
   }
 
   final case class Quiz(run: () => QuizResult) { self =>
@@ -475,14 +496,14 @@ object education {
      *
      * Add an operator `+` that appends this quiz to the specified quiz.
      */
-    def +(that: Quiz): Quiz = ???
+    def +(that: Quiz): Quiz = Quiz(() => self.run() + that.run())
 
     /**
      * EXERCISE 4
      *
      * Add a unary operator `bonus` that marks this quiz as a bonus quiz.
      */
-    def bonus: Quiz = ???
+    def bonus: Quiz = Quiz(() => self.run().toBonus)
 
     /**
      * EXERCISE 5
@@ -491,7 +512,8 @@ object education {
      * enough, as determined by the specified cutoff, will do the `ifPass`
      * quiz afterward; but otherwise, do the `ifFail` quiz.
      */
-    def conditional(cutoff: Int)(ifPass: Quiz, ifFail: Quiz): Quiz = ???
+    def conditional(cutoff: Int)(ifPass: Quiz, ifFail: Quiz): Quiz =
+      Quiz(() => if (self.run().correctPoints > cutoff) ifPass.run() else ifFail.run())
   }
   object Quiz {
     private def grade[A](f: String => A, checker: Checker[A]): QuizResult =
@@ -528,7 +550,7 @@ object education {
      * Add an `empty` Quiz that does not ask any questions and only returns
      * an empty QuizResult.
      */
-    def empty: Quiz = ???
+    def empty: Quiz = Quiz(() => QuizResult.empty)
   }
 
   final case class Checker[-A](points: Int, isCorrect: A => Either[String, Unit])
@@ -553,5 +575,24 @@ object education {
    * to a simpler bonus question with fewer bonus points.
    */
   lazy val exampleQuiz: Quiz =
-    Quiz(Question.TrueFalse("Is coffee the best hot beverage on planet earth?", Checker.isTrue(10)))
+    Quiz(
+      Question.TrueFalse("Is coffee the best hot beverage on planet earth?", Checker.isTrue(10))
+    ) +
+      Quiz(
+        Question.TrueFalse("Is coffee the best hot beverage on planet earth?", Checker.isTrue(10))
+      ) +
+      Quiz(
+        Question.TrueFalse("Is coffee the best hot beverage on planet earth?", Checker.isTrue(10))
+      ) +
+      Quiz(
+        Question.TrueFalse("Is coffee the best hot beverage on planet earth?", Checker.isTrue(10))
+      ) + {
+      Quiz(
+        Question.TrueFalse("Is coffee the best hot beverage on planet earth?", Checker.isTrue(10))
+      ).bonus.conditional(10)(
+        Quiz(Question.TrueFalse("Even harder question?", Checker.isTrue(10))),
+        Quiz(Question.TrueFalse("Easier question?", Checker.isTrue(5)))
+      )
+    }
+
 }

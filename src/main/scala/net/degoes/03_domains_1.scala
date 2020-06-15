@@ -1,5 +1,7 @@
 package net.degoes
 
+import ch.qos.logback.classic.spi.PackagingDataCalculator
+
 /*
  * INTRODUCTION
  *
@@ -76,7 +78,7 @@ object spreadsheet {
      * Design a subtype of `CellContents` called `CalculatedValue`, which
      * represents a value that is dynamically computed from a spreadsheet.
      */
-    final case class CalculatedValue() extends CellContents { self =>
+    final case class CalculatedValue(evaluate: Spreadsheet => CellContents) extends CellContents { self =>
 
       /**
        * EXERCISE 2
@@ -84,7 +86,13 @@ object spreadsheet {
        * Add some operators to transform one `CalculatedValue` into another `CalculatedValue`. For
        * example, one operator could "negate" a double expression.
        */
-      def negate: CalculatedValue = ???
+      def negate: CalculatedValue =
+        CalculatedValue { spreadsheet =>
+          self.evaluate(spreadsheet) match {
+            case Dbl(value) => Dbl(-value)
+            case x          => Error(s"Expected Double but found $x")
+          }
+        }
 
       /**
        * EXERCISE 3
@@ -92,7 +100,15 @@ object spreadsheet {
        * Add some operators to combine `CalculatedValue`. For example, one operator
        * could sum two double expressions.
        */
-      def sum(that: CalculatedValue): CalculatedValue = ???
+      def sum(that: CalculatedValue): CalculatedValue = CalculatedValue { spreadsheet =>
+        val left  = self.evaluate(spreadsheet)
+        val right = self.evaluate(spreadsheet)
+
+        (left, right) match {
+          case (Dbl(left), Dbl(right)) => Dbl(left + right)
+          case (x, y)                  => Error(s"Cannot add the values $x and $y")
+        }
+      }
     }
     object CalculatedValue {
 
@@ -101,7 +117,12 @@ object spreadsheet {
        *
        * Add a constructor that makes an CalculatedValue from a CellContents.
        */
-      def const(contents: CellContents): CalculatedValue = ???
+      def const(contents: CellContents): CalculatedValue = contents match {
+        case Dbl(value)     => CalculatedValue(_ => Dbl(value))
+        case Error(message) => CalculatedValue(_ => Error(message))
+        case Str(value)     => CalculatedValue(_ => Str(value))
+        case x              => CalculatedValue(_ => Error(s"Cannot convert $x to CalculatedValue"))
+      }
 
       /**
        * EXERCISE 5
@@ -110,6 +131,8 @@ object spreadsheet {
        * specified cell, identified by col/row.
        */
       def at(col: Int, row: Int): CalculatedValue = ???
+
+      def fromDouble(d: Double): CalculatedValue = CalculatedValue(_ => Dbl(d))
     }
   }
 
@@ -170,7 +193,13 @@ object etl {
    * Also mock out, but do not implement, a method on each repository type called
    * `load`, which returns a `DataStream`.
    */
-  type DataRepo
+  sealed trait DataRepo
+  object DataRepo {
+    final case class URL(url: String)                 extends DataRepo
+    final case class FTP(host: String, port: Int)     extends DataRepo
+    final case class S3(url: String, bucket: String)  extends DataRepo
+    final case class Database(jdbcConnection: String) extends DataRepo
+  }
 
   /**
    * EXERCISE 2
@@ -178,7 +207,13 @@ object etl {
    * Design a data type that models the type of primitives the ETL pipeline
    * has access to. This will include string, numeric, and date/time data.
    */
-  type DataType
+  sealed trait DataType
+  object DataType {
+    final case object Str      extends DataType
+    final case object Integer  extends DataType
+    final case object DateTime extends DataType
+    final case object Bool     extends DataType
+  }
 
   /**
    * EXERCISE 3
@@ -192,7 +227,15 @@ object etl {
   sealed trait DataValue {
     def dataType: DataType
 
-    def coerce(otherType: DataType): Option[DataValue]
+    //def coerce(otherType: DataType): Option[DataValue]
+  }
+
+  object DataValue {
+    abstract class AbstractDataValue(val dataType: DataType) extends DataValue
+    final case class Integer(i: Int)                         extends AbstractDataValue(DataType.Integer)
+    final case class DateTime(t: java.time.LocalDateTime)    extends AbstractDataValue(DataType.DateTime)
+    final case class Bool(b: Boolean)                        extends AbstractDataValue(DataType.Bool)
+    final case class Str(s: String)                          extends AbstractDataValue(DataType.Str)
   }
 
   /**
@@ -200,7 +243,9 @@ object etl {
    * set into an output data step, as a series of one or more individual
    * operations.
    */
-  final case class Pipeline(run: () => DataStream) { self =>
+  case class Pipeline(run: () => DataStream) { self =>
+
+    def +(that: Pipeline): Pipeline = Pipeline.Sequential(self, that)
 
     /**
      * EXERCISE 4
@@ -246,7 +291,16 @@ object etl {
      */
     def replaceNulls(column: String, defaultValue: DataValue): Pipeline = ???
   }
+
   object Pipeline {
+    //final case class Extract(dataRepo: DataRepo)                                               extends Pipeline
+    //final case class Sequential(first: Pipeline, second: Pipeline)                             extends Pipeline
+    //final case class Fallback(first: Pipeline, second: Pipeline)                               extends Pipeline
+    //final case class Rename(pipeline: Pipeline, oldName: String, newName: String)              extends Pipeline
+    //final case class Coerce(pipeline: Pipeline, name: String, newType: DataType)               extends Pipeline
+    //final case class Delete(pipeline: Pipeline, column: String)                                extends Pipeline
+    //final case class ReplaceNulls(pipeline: Pipeline, column: String, defaultValue: DataValue) extends Pipeline
+    //final case class Load(pipeline: Pipeline, repo: DataRepo)                                  extends Pipeline
 
     /**
      * EXERCISE 10
@@ -297,7 +351,9 @@ object pricing_fetcher {
    * `Schedule` is a data type that models a schedule as a simple function,
    * which specifies whether or not it is time to perform a fetch.
    */
-  final case class Schedule(fetchNow: Time => Boolean) {
+  sealed trait Schedule { self =>
+    //final case class Schedule(fetchNow: Time => Boolean) { self =>
+    import Schedule._
     /*
      * EXERCISE 1
      *
@@ -305,7 +361,7 @@ object pricing_fetcher {
      * yield the union of those schedules. That is, the fetch will occur
      * only when either of the schedules would have performed a fetch.
      */
-    def union(that: Schedule): Schedule = ???
+    def union(that: Schedule): Schedule = Union(self, that)
 
     /**
      * EXERCISE 2
@@ -314,7 +370,7 @@ object pricing_fetcher {
      * yield the intersection of those schedules. That is, the fetch will occur
      * only when both of the schedules would have performed a fetch.
      */
-    def intersection(that: Schedule): Schedule = ???
+    def intersection(that: Schedule): Schedule = Interleave(self, that)
 
     /**
      * EXERCISE 3
@@ -325,7 +381,15 @@ object pricing_fetcher {
      */
     def negate: Schedule = ???
   }
+
   object Schedule {
+    final case class Weeks(value: List[Int])                     extends Schedule
+    final case class DaysOfTheWeek(value: List[Int])             extends Schedule
+    final case class Hours(value: List[Int])                     extends Schedule
+    final case class Minutes(value: List[Int])                   extends Schedule
+    final case class Times(schedule: Schedule, n: Int)           extends Schedule
+    final case class Union(left: Schedule, right: Schedule)      extends Schedule
+    final case class Interleave(left: Schedule, right: Schedule) extends Schedule
 
     /**
      * EXERCISE 4
@@ -333,7 +397,7 @@ object pricing_fetcher {
      * Create a constructor for Schedule that models fetching on specific weeks
      * of the month.
      */
-    def weeks(weeks: Int*): Schedule = ???
+    def weeks(weeks: Int*): Schedule = Weeks(weeks.toList)
 
     /**
      * EXERCISE 5
@@ -341,7 +405,7 @@ object pricing_fetcher {
      * Create a constructor for Schedule that models fetching on specific days
      * of the week.
      */
-    def daysOfTheWeek(daysOfTheWeek: DayOfWeek*): Schedule = ???
+    def daysOfTheWeek(daysOfTheWeek: Int*): Schedule = DaysOfTheWeek(daysOfTheWeek.toList)
 
     /**
      * EXERCISE 6
@@ -349,7 +413,7 @@ object pricing_fetcher {
      * Create a constructor for Schedule that models fetching on specific
      * hours of the day.
      */
-    def hoursOfTheDay(hours: Int*): Schedule = ???
+    def hoursOfTheDay(hours: Int*): Schedule = Hours(hours.toList)
 
     /**
      * EXERCISE 7
@@ -357,7 +421,7 @@ object pricing_fetcher {
      * Create a constructor for Schedule that models fetching on specific minutes
      * of the hour.
      */
-    def minutesOfTheHour(minutes: Int*): Schedule = ???
+    def minutesOfTheHour(minutes: Int*): Schedule = Minutes(minutes.toList)
   }
 
   /**
@@ -366,5 +430,9 @@ object pricing_fetcher {
    * Create a schedule that repeats every Wednesday, at 6:00 AM and 12:00 PM,
    * and at 5:30, 6:30, and 7:30 every Thursday.
    */
-  lazy val schedule: Schedule = ???
+  import Schedule._
+  lazy val schedule: Schedule = Schedule
+    .daysOfTheWeek(3)
+    .union(hoursOfTheDay(6, 12))
+    .union(daysOfTheWeek(4).union(hoursOfTheDay(5, 7).union(minutesOfTheHour(30))))
 }
